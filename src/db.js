@@ -7,7 +7,9 @@ const { ask } = require('./input');
 const uri = 'mongodb://localhost:27017'; 
 const client = new MongoClient(uri);
 
-let db;
+let db, collection;
+
+
 
 function createCustomId()
 {
@@ -25,13 +27,63 @@ async function connectDB() {
   }
 }
 
-async function insertPose(doc) {
-  if (!db) {
-    await connectDB();
-  }
-  const collection = db.collection('poses');
+async function checkOrCreateDatabase(dbName) {
+  await connectDB();
+  const adminDb = client.db().admin();
+  const dbsInfo = await adminDb.listDatabases();
+  const existingDbs = dbsInfo.databases.map(db => db.name);
 
-    const existingId = await collection.findOne({ _id: doc._id });
+  if (existingDbs.includes(dbName)) {
+    console.log(`Database '${dbName}' exists. Proceeding...`);
+    return client.db(dbName);
+  } else {
+    const response = await ask(`Database '${dbName}' does not exist. Create it? (yes/no): `);
+    if (response.trim().toLowerCase() === 'yes') {
+      console.log(`Creating and switching to database '${dbName}'...`);
+      return client.db(dbName);
+    } else {
+      console.log('Operation cancelled by user.');
+      return null;
+    }
+  }
+}
+
+async function checkOrCreateCollection(db, collectionName)
+{
+  const collections = await db.listCollections().toArray();
+  const collectionNames = collections.map(c => c.name);
+
+  if(collectionNames.includes(collectionName)) {
+    console.log(`Collection '${collectionName}' exists in database '${db.databaseName}'.`);
+    return db.collection(collectionName);
+  }
+
+  else{
+    const response = await ask(`Collection '${collectionName}' does not exist in database '${db.databaseName}'. Create it? (yes/no): `);
+    if (response.trim().toLowerCase() === 'yes') {
+      console.log(`Creating collection '${collectionName}' in database '${db.databaseName}'...`);
+      await db.createCollection(collectionName);
+      return db.collection(collectionName);
+    } 
+    
+    else {
+      console.log('Operation cancelled by user.');
+      return null;
+    }
+  }
+
+}
+
+async function selectDatabase(dbName)
+{
+  await connectDB();
+  db = client.db(dbName);
+  console.log(`Using database: ${dbName}`);
+  return db;
+}
+
+async function insertPose(collection, doc) {
+  const existingId = await collection.findOne({ _id: doc._id });
   if (existingId) {
     console.log(`Error: The _id '${doc._id}' already exists. Please choose another ID.`);
     return false;
@@ -59,12 +111,7 @@ async function insertPose(doc) {
   return true;
 }
 
-
-async function deletePoseById(id) {
-  if (!db) {
-    await connectDB();
-  }
-  const collection = db.collection('poses');
+async function deletePoseById(collection, id) {
   try {
     const result = await collection.deleteOne({ _id: id });
     if (result.deletedCount === 1) {
@@ -77,7 +124,7 @@ async function deletePoseById(id) {
   }
 }
 
-async function getid() {
+async function inputId() {
   const inputId = await ask('Enter Pose ID (leave blank to auto-generate): ');
   if (inputId.trim() === '') {
     const newId = uuidv4();
@@ -87,12 +134,7 @@ async function getid() {
   return inputId.trim();
 }
 
-async function getPoseById(id) {
-  if (!db) {
-    await connectDB();
-  }
-  const collection = db.collection('poses');
-
+async function getPoseById(collection, id) {
   try {
     const pose = await collection.findOne({ _id: id });
     if (!pose) {
@@ -114,4 +156,4 @@ async function closeDB() {
   console.log('MongoDB connection closed');
 }
 
-module.exports = { insertPose, closeDB, connectDB, deletePoseById, createCustomId, getid, getPoseById };
+module.exports = { selectDatabase, checkOrCreateDatabase, checkOrCreateCollection, insertPose, closeDB, connectDB, deletePoseById, createCustomId, inputId, getPoseById };

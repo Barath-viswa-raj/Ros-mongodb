@@ -1,21 +1,12 @@
 const { Pose, Position, Orientation } = require('./pose');
-const { connectDB, insertPose, closeDB, deletePoseById } = require('./db');
+const { selectDatabase, insertPose, deletePoseById, getPoseById, closeDB,connectDB } = require('./db');
 const { askFloat, closeInput, ask } = require('./input');
-const { MongoClient } = require('mongodb');
-const { getid } = require('./db');
-const {getPoseById} = require('./db');
+const { inputId } = require('./db');
+const {checkOrCreateDatabase} = require('./db');
+const {checkOrCreateCollection} = require('./db');
 
 let db;
-
-function arePosesEqual(p1, p2) {
-  return p1.position.x === p2.position.x &&
-    p1.position.y === p2.position.y &&
-    p1.position.z === p2.position.z &&
-    p1.orientation.x === p2.orientation.x &&
-    p1.orientation.y === p2.orientation.y &&
-    p1.orientation.z === p2.orientation.z &&
-    p1.orientation.w === p2.orientation.w;
-}
+let collection;
 
 async function getPoseInput() {
   const x = await askFloat('Enter position x: ');
@@ -31,18 +22,33 @@ async function getPoseInput() {
 
   return new Pose(position, orientation);
 }
-
-async function listAllPoses() {
-  if (!db) {
-    db = await connectDB();
+async function listAllDatabases(db) {
+  const databases = await db.admin().listDatabases();
+  if (databases.databases.length === 0) {
+    console.log('No databases found.');
+  } else {
+    databases.databases.forEach(database => {
+      console.log(`Database Name: ${database.name}`);
+    });
   }
-  const poses = await db.collection('poses').find().toArray();
+}
 
-  if(poses.length === 0) {
+async function listAllCollections(db) {
+  const collections = await db.listCollections().toArray();
+  if (collections.length === 0) {
+    console.log('No collections found.');
+  } else {
+    collections.forEach(collection => {
+      console.log(`Collection Name: ${collection.name}`);
+    });
+  }
+}
+
+async function listAllPoses(collection) {
+  const poses = await collection.find().toArray();
+  if (poses.length === 0) {
     console.log('No poses found.');
-  }
-  else 
-  {
+  } else {
     poses.forEach(pose => {
       console.log(`_id: ${pose._id}`);
       console.log('  Position:', pose.position);
@@ -52,24 +58,84 @@ async function listAllPoses() {
   }
 }
 
-async function main() {
-  db = await connectDB();
-
-  try {
-    while (true) {
-      const action = (await ask('Choose action (insert/retrieve/list/delete/quit): ')).trim().toLowerCase();
-
-      if (action === 'insert') {
-        const id = await getid();
-        const newPose = await getPoseInput();
-        const doc = newPose.toDocument()       ;
-        doc._id = id;
-        
-        await insertPose(doc);
+async function selectDatabaseAndCollection() {
+  if (!db) {
+    db = await connectDB();
+  }
+  while (true) {
+    await listAllDatabases(db);
+    const dbName = await ask('Enter the database name to use: ');
+    const selectedDb = await checkOrCreateDatabase(dbName.trim());
+    if (selectedDb) {
+      db = selectedDb;
+      break;
+    }
+    else{
+      const retry = await ask('Would you like to enter another database name? (yes/no): ');
+      if (retry.trim().toLowerCase() !== 'yes') {
+        console.log('Disconnecting from the Database...');
+        process.exit(0);
       }
+    }
+  }
+
+  while (true) {
+    await listAllCollections(db);
+    const collectionName = await ask("Enter the collection name to use:");
+    const selectCollection = await checkOrCreateCollection(db, collectionName.trim());
+    if (selectCollection) {
+      collection = selectCollection;
+      break;
+    }
+    else{
+      const retry = await ask('Would you like to enter another collection name? (yes/no): ');
+      if (retry.trim().toLowerCase() !== 'yes') {
+        console.log('Disconnecting from the Database...');
+        process.exit(0);
+      }
+    }
+  }
+
+}
+
+async function main() {
+  try {
+    await selectDatabaseAndCollection();
+
+    // while (true) {
+    //   const dbName = await ask('Enter the database name to use: ');
+    //   const selectedDb = await checkOrCreateDatabase(dbName.trim());
+    //   if (selectedDb) {
+    //     db = selectedDb;
+    //     break; 
+    //   } else {
+    //     const retry = await ask('Would you like to enter another database name? (yes/no): ');
+    //     if (retry.trim().toLowerCase() !== 'yes') {
+    //       console.log('Disconnecting from the Database...');
+    //       process.exit(0);
+    //     }
+    //   }
+    // }
+
+    while (true) {
+      const action = (await ask('Choose action (insert/retrieve/list/delete/quit/change-db): ')).trim().toLowerCase();
+
+      if (action === 'change-db') {
+        await selectDatabaseAndCollection();
+
+      } 
+      
+      else if (action === 'insert') {
+        const id = await inputId();
+        const newPose = await getPoseInput();
+        const doc = newPose.toDocument();
+        doc._id = id;
+        await insertPose(collection, doc);
+      }
+      
       else if (action === 'retrieve') {
         const id = await ask('Enter the _id of the Pose you want to retrieve: ');
-        const pose = await getPoseById(id.trim());
+        const pose = await getPoseById(collection, id.trim());
         if (pose) {
           console.log(`_id: ${pose._id}`);
           console.log('  Position:', pose.position);
@@ -77,23 +143,23 @@ async function main() {
           console.log('-------------------------------------');
         }
       }
-
+      
       else if (action === 'list') {
-        await listAllPoses();
+        await listAllPoses(collection);
       }
-
+      
       else if (action === 'delete') {
-        await listAllPoses();
+        await listAllPoses(collection);
         const toDelete = await ask('Enter the _id of the Pose you want to delete: ');
-        await deletePoseById(toDelete.trim());
+        await deletePoseById(collection, toDelete.trim());
       }
-
+      
       else if (action === 'quit') {
         break;
-      }
-
+      } 
+      
       else {
-        console.log('Unknown action. Please type insert, list, delete, or quit.');
+        console.log('Unknown action. Please type insert, retrieve, list, delete, change-db, or quit.');
       }
     }
   } catch (error) {
